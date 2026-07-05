@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -231,6 +231,10 @@ class Evaluator:
         """Return whether mixed precision is enabled during inference."""
         return self.config.training.use_amp and self.device.type == "cuda"
 
+    def _amp_device_type(self) -> str:
+        """Return the device type string used by ``torch.amp`` APIs."""
+        return "cuda" if self.device.type == "cuda" else "cpu"
+
     @torch.no_grad()
     def run_split_inference(
         self,
@@ -262,7 +266,7 @@ class Evaluator:
             labels = batch["labels"].to(self.device, non_blocking=True)
             batch_paths = batch["image_path"]
 
-            with autocast(device_type=self.device.type, enabled=self._use_amp()):
+            with autocast(self._amp_device_type(), enabled=self._use_amp()):
                 logits = self.model(images)
                 loss = compute_batch_loss(self.loss_fn, logits, labels)
 
@@ -464,7 +468,7 @@ class Evaluator:
         image_tensor = load_single_image(image_path=image_path, config=self.config)
         batch_tensor = image_tensor.unsqueeze(0).to(self.device, non_blocking=True)
 
-        with autocast(device_type=self.device.type, enabled=self._use_amp()):
+        with autocast(self._amp_device_type(), enabled=self._use_amp()):
             logits = self.model(batch_tensor)
 
         probabilities = torch.sigmoid(logits).detach().cpu().numpy()[0]
@@ -519,7 +523,7 @@ class Evaluator:
         progress = tqdm(dataloader, desc="Batch Inference", leave=False)
         for batch_tensor in progress:
             batch_tensor = batch_tensor.to(self.device, non_blocking=True)
-            with autocast(device_type=self.device.type, enabled=self._use_amp()):
+            with autocast(self._amp_device_type(), enabled=self._use_amp()):
                 logits = self.model(batch_tensor)
 
             batch_probabilities = torch.sigmoid(logits).detach().cpu().numpy()

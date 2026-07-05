@@ -16,7 +16,7 @@ import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler
 from torch.utils.data import DataLoader
@@ -259,7 +259,7 @@ class Trainer:
 
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
-        self.scaler = GradScaler(enabled=self._use_amp())
+        self.scaler = GradScaler(self._amp_device_type(), enabled=self._use_amp())
         self.early_stopping = self._build_early_stopping()
         self.writer = self._build_tensorboard_writer()
         self._configure_file_logging()
@@ -280,6 +280,10 @@ class Trainer:
     def _use_amp(self) -> bool:
         """Return whether automatic mixed precision is enabled."""
         return self.config.training.use_amp and self.device.type == "cuda"
+
+    def _amp_device_type(self) -> str:
+        """Return the device type string used by ``torch.amp`` APIs."""
+        return "cuda" if self.device.type == "cuda" else "cpu"
 
     def _build_optimizer(self) -> AdamW:
         """Create the AdamW optimizer."""
@@ -519,7 +523,7 @@ class Trainer:
             self.optimizer.zero_grad(set_to_none=True)
 
             try:
-                with autocast(device_type=self.device.type, enabled=self._use_amp()):
+                with autocast(self._amp_device_type(), enabled=self._use_amp()):
                     logits = self.model(images)
                     loss = compute_batch_loss(self.loss_fn, logits, labels)
             except Exception as exc:
@@ -578,7 +582,7 @@ class Trainer:
             images = batch["image"].to(self.device, non_blocking=True)
             labels = batch["labels"].to(self.device, non_blocking=True)
 
-            with autocast(device_type=self.device.type, enabled=self._use_amp()):
+            with autocast(self._amp_device_type(), enabled=self._use_amp()):
                 logits = self.model(images)
                 loss = compute_batch_loss(self.loss_fn, logits, labels)
 
