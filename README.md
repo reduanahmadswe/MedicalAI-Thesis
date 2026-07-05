@@ -132,18 +132,35 @@ plt.show()
 
 ## Quick Start
 
-### 1. Initialize experiment
+### 1. Train (notebook — two lines only)
+
+```python
+from src.trainer import Trainer
+
+trainer = Trainer()
+history = trainer.fit()
+```
+
+Resume training:
+
+```python
+trainer = Trainer()
+history = trainer.fit(resume=True)
+```
+
+### 2. Initialize experiment (optional)
 
 ```python
 from src.utils import initialize_experiment, print_config_summary
-from src.trainer import train_model
+from src.trainer import Trainer
 
 config = initialize_experiment()
 print_config_summary(config)
-history = train_model(config)
+trainer = Trainer(config=config)
+history = trainer.fit()
 ```
 
-### 2. Switch model (one line)
+### 3. Switch model (one line)
 
 ```python
 from src.config import build_config, ModelConfig, ModelName
@@ -154,7 +171,7 @@ trainer = Trainer(config=config)
 history = trainer.train()
 ```
 
-### 3. Full evaluation pipeline
+### 4. Full evaluation pipeline
 
 ```python
 from src.evaluate import run_full_evaluation_pipeline
@@ -163,7 +180,7 @@ reports = run_full_evaluation_pipeline()
 print(reports["test"].metrics.auroc_macro)
 ```
 
-### 4. Single-image inference
+### 5. Single-image inference
 
 ```python
 from src.evaluate import run_inference_on_image
@@ -172,7 +189,7 @@ result = run_inference_on_image("data/images/sample.png")
 print(result["predicted_diseases"])
 ```
 
-### 5. Grad-CAM explanation
+### 6. Grad-CAM explanation
 
 ```python
 from src.gradcam import explain_prediction
@@ -258,13 +275,35 @@ python -c "from src.gradcam import explain_prediction; explain_prediction('data/
 
 ## Resume Training
 
-Set in `TrainingConfig` or `config.py`:
+Set `resume=True` when calling `fit()`:
 
 ```python
-training=TrainingConfig(resume_training=True)
+trainer = Trainer()
+history = trainer.fit(resume=True)
 ```
 
-The trainer loads `checkpoints/latest_checkpoint.pt` automatically.
+The trainer loads `checkpoints/last_model.pth` and restores model, optimizer, scheduler, and AMP scaler.
+
+## Training Outputs
+
+```
+checkpoints/
+├── best_model.pth
+├── last_model.pth
+├── checkpoint_epoch_001.pth
+├── checkpoint_epoch_002.pth
+└── ...
+
+results/
+├── training_log.csv
+├── loss_curve.png
+├── auroc_curve.png
+├── lr_curve.png
+├── precision_curve.png
+├── recall_curve.png
+├── f1_curve.png
+└── tensorboard/
+```
 
 ## License
 

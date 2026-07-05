@@ -499,7 +499,7 @@ def load_model_from_checkpoint(
     """Load a model and metadata from a checkpoint file.
 
     Args:
-        checkpoint_path: Path to a ``.pt`` checkpoint file.
+        checkpoint_path: Path to a ``.pth`` checkpoint file.
         config: Optional configuration used to rebuild the architecture.
         map_location: Device mapping for ``torch.load``.
         strict: Whether to strictly enforce state dict key matching.

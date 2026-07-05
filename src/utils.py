@@ -539,7 +539,7 @@ def checkpoint_exists(config: Optional[Config] = None, best: bool = True) -> boo
     """
     config = config or get_default_config()
     checkpoint_path = (
-        config.paths.best_model_path if best else config.paths.latest_checkpoint_path
+        config.paths.best_model_path if best else config.paths.last_model_path
     )
     return checkpoint_path.exists()
 

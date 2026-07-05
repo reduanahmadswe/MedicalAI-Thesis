@@ -85,7 +85,8 @@ class PathConfig:
         results_dir: Directory for metrics, plots, and prediction exports.
         tensorboard_dir: Directory for TensorBoard event files.
         best_model_filename: Filename for the best-performing checkpoint.
-        latest_checkpoint_filename: Filename for the most recent checkpoint.
+        last_model_filename: Filename for the most recent (last) checkpoint.
+        epoch_checkpoint_prefix: Prefix for per-epoch checkpoint files.
     """
 
     project_root: Path = PROJECT_ROOT
@@ -115,10 +116,11 @@ class PathConfig:
     )
     results_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "results")
     tensorboard_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / "runs" / "tensorboard"
+        default_factory=lambda: PROJECT_ROOT / "results" / "tensorboard"
     )
-    best_model_filename: str = "best_model.pt"
-    latest_checkpoint_filename: str = "latest_checkpoint.pt"
+    best_model_filename: str = "best_model.pth"
+    last_model_filename: str = "last_model.pth"
+    epoch_checkpoint_prefix: str = "checkpoint_epoch_"
 
     def __post_init__(self) -> None:
         """Validate path-related configuration after initialization."""
@@ -135,9 +137,27 @@ class PathConfig:
         return self.checkpoint_dir / self.best_model_filename
 
     @property
+    def last_model_path(self) -> Path:
+        """Return the full path to the last saved checkpoint."""
+        return self.checkpoint_dir / self.last_model_filename
+
+    @property
     def latest_checkpoint_path(self) -> Path:
-        """Return the full path to the latest training checkpoint."""
-        return self.checkpoint_dir / self.latest_checkpoint_filename
+        """Backward-compatible alias for ``last_model_path``."""
+        return self.last_model_path
+
+    def epoch_checkpoint_path(self, epoch: int) -> Path:
+        """Return the checkpoint path for a specific 1-based epoch number.
+
+        Args:
+            epoch: One-based epoch index (e.g., 1, 2, 3).
+
+        Returns:
+            Path such as ``checkpoints/checkpoint_epoch_001.pth``.
+        """
+        if epoch <= 0:
+            raise ValueError("epoch must be a positive integer.")
+        return self.checkpoint_dir / f"{self.epoch_checkpoint_prefix}{epoch:03d}.pth"
 
     def ensure_directories(self) -> None:
         """Create output directories if they do not exist."""
@@ -310,8 +330,9 @@ class TrainingConfig:
         early_stopping_min_delta: Minimum improvement to reset patience counter.
         early_stopping_monitor: Metric name monitored for early stopping.
         early_stopping_mode: Optimization direction ('min' or 'max').
-        save_best_only: Save only the best checkpoint (always saves latest).
-        resume_training: Resume from latest checkpoint if available.
+        save_best_only: Save only the best checkpoint (always saves last model).
+        save_epoch_checkpoints: Save ``checkpoint_epoch_XXX.pth`` every epoch.
+        resume_training: Deprecated; use ``Trainer.fit(resume=True)`` instead.
         log_interval: Log training metrics every N batches.
         eval_interval: Run validation every N epochs (1 = every epoch).
         threshold: Default decision threshold for multi-label predictions.
@@ -326,9 +347,10 @@ class TrainingConfig:
     early_stopping: bool = True
     early_stopping_patience: int = 10
     early_stopping_min_delta: float = 1e-4
-    early_stopping_monitor: str = "val_macro_auroc"
+    early_stopping_monitor: str = "auroc"
     early_stopping_mode: str = "max"
     save_best_only: bool = False
+    save_epoch_checkpoints: bool = True
     resume_training: bool = False
     log_interval: int = 50
     eval_interval: int = 1

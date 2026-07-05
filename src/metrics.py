@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -952,6 +952,160 @@ def plot_learning_curves(
         plt.close(fig)
 
     logger.info("Saved learning curves to %s.", output_path)
+
+
+TRAINING_LOG_COLUMNS: Tuple[str, ...] = (
+    "epoch",
+    "train_loss",
+    "val_loss",
+    "auroc",
+    "precision",
+    "recall",
+    "f1",
+    "accuracy",
+    "learning_rate",
+)
+
+
+def build_epoch_log_record(
+    epoch: int,
+    train_loss: float,
+    val_metrics: MetricsResult,
+    learning_rate: float,
+) -> Dict[str, float]:
+    """Build a standardized training log record for one epoch.
+
+    Args:
+        epoch: One-based epoch number.
+        train_loss: Mean training loss for the epoch.
+        val_metrics: Validation metrics result.
+        learning_rate: Optimizer learning rate after the epoch.
+
+    Returns:
+        Dictionary matching ``TRAINING_LOG_COLUMNS``.
+    """
+    return {
+        "epoch": float(epoch),
+        "train_loss": float(train_loss),
+        "val_loss": float(val_metrics.loss if val_metrics.loss is not None else float("nan")),
+        "auroc": float(val_metrics.auroc_macro),
+        "precision": float(val_metrics.precision_macro),
+        "recall": float(val_metrics.recall_macro),
+        "f1": float(val_metrics.f1_macro),
+        "accuracy": float(val_metrics.accuracy),
+        "learning_rate": float(learning_rate),
+    }
+
+
+def plot_metric_curve(
+    history: pd.DataFrame,
+    column: str,
+    output_path: Union[str, Path],
+    ylabel: str,
+    title: str,
+) -> None:
+    """Plot a single metric curve over training epochs.
+
+    Args:
+        history: DataFrame containing epoch-wise metric values.
+        column: Column name to plot.
+        output_path: Destination image file path.
+        ylabel: Y-axis label.
+        title: Plot title.
+
+    Raises:
+        ValueError: If the column is missing from history.
+        OSError: If saving the figure fails.
+    """
+    if column not in history.columns:
+        raise ValueError(f"history DataFrame missing required column '{column}'.")
+
+    fig, axis = plt.subplots(figsize=(8, 5))
+    try:
+        axis.plot(history[column], linewidth=2.0, color="steelblue")
+        axis.set_xlabel("Epoch")
+        axis.set_ylabel(ylabel)
+        axis.set_title(title)
+        axis.grid(alpha=0.3)
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    except Exception as exc:
+        logger.exception("Failed to plot metric curve for '%s'.", column)
+        raise OSError(f"Unable to save metric curve plot for '{column}'.") from exc
+    finally:
+        plt.close(fig)
+
+    logger.info("Saved %s to %s.", title, output_path)
+
+
+def save_training_plots(history: pd.DataFrame, output_dir: Union[str, Path]) -> None:
+    """Generate and save all standard training curve plots.
+
+    Creates ``loss_curve.png``, ``auroc_curve.png``, ``lr_curve.png``,
+    ``precision_curve.png``, ``recall_curve.png``, and ``f1_curve.png``.
+
+    Args:
+        history: Training history DataFrame.
+        output_dir: Directory where plots will be saved.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if {"train_loss", "val_loss"}.issubset(history.columns):
+        plot_loss_curve(
+            history=history,
+            output_path=output_dir / "loss_curve.png",
+        )
+
+    plot_specs = {
+        "auroc_curve.png": ("auroc", "Mean AUROC", "Validation Mean AUROC"),
+        "lr_curve.png": ("learning_rate", "Learning Rate", "Learning Rate Schedule"),
+        "precision_curve.png": ("precision", "Mean Precision", "Validation Mean Precision"),
+        "recall_curve.png": ("recall", "Mean Recall", "Validation Mean Recall"),
+        "f1_curve.png": ("f1", "Mean F1", "Validation Mean F1"),
+    }
+
+    for filename, (column, ylabel, title) in plot_specs.items():
+        if column in history.columns:
+            plot_metric_curve(
+                history=history,
+                column=column,
+                output_path=output_dir / filename,
+                ylabel=ylabel,
+                title=title,
+            )
+
+
+def save_training_log_csv(
+    history: List[Dict[str, Any]],
+    output_path: Union[str, Path],
+) -> None:
+    """Save standardized training history to CSV.
+
+    Args:
+        history: List of epoch log dictionaries.
+        output_path: Destination CSV path.
+
+    Raises:
+        OSError: If writing the CSV fails.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    history_df = pd.DataFrame(history)
+    available_columns = [col for col in TRAINING_LOG_COLUMNS if col in history_df.columns]
+    history_df = history_df[available_columns]
+
+    try:
+        history_df.to_csv(output_path, index=False)
+    except Exception as exc:
+        logger.exception("Failed to save training log CSV.")
+        raise OSError(f"Unable to save training log to {output_path}") from exc
+
+    logger.info("Saved training log to %s.", output_path)
 
 
 def export_evaluation_artifacts(
