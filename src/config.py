@@ -89,10 +89,15 @@ class PathConfig:
     """
 
     project_root: Path = PROJECT_ROOT
-    data_root: Path = PROJECT_ROOT / "data"
-    train_csv: Path = field(default_factory=lambda: PROJECT_ROOT / "data" / "train.csv")
-    val_csv: Path = field(default_factory=lambda: PROJECT_ROOT / "data" / "val.csv")
-    test_csv: Path = field(default_factory=lambda: PROJECT_ROOT / "data" / "test.csv")
+
+# Dataset stored in Google Drive
+    data_root: Path = Path("/content/drive/MyDrive/MedicalAI-Thesis/Dataset")
+    
+    train_csv: Path = data_root / "train.csv"
+    
+    val_csv: Path = data_root / "val.csv"
+    
+    test_csv: Path = data_root / "test.csv"
     image_column: str = "Image_Path"
     label_columns: Tuple[str, ...] = NIH_DISEASE_LABELS
     checkpoint_dir: Path = field(
