@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.cuda.amp import GradScaler, autocast
@@ -29,9 +30,14 @@ from src.metrics import (
     MetricsAccumulator,
     MetricsResult,
     build_epoch_log_record,
+    compute_metrics,
     save_metrics_csv,
+    save_best_thresholds_csv,
     save_training_log_csv,
     save_training_plots,
+    save_training_summary_csv,
+    save_validation_epoch_artifacts,
+    search_best_thresholds,
 )
 from src.models import build_model, move_model_to_device, summarize_model
 from src.utils import set_seed
@@ -181,6 +187,11 @@ def _build_checkpoint_payload(
         "scaler_state_dict": trainer.scaler.state_dict(),
         "best_metric": trainer.state.best_metric,
         "epochs_without_improvement": trainer.state.epochs_without_improvement,
+        "optimized_thresholds": (
+            trainer.optimized_thresholds.tolist()
+            if trainer.optimized_thresholds is not None
+            else None
+        ),
         "config": trainer.config.to_dict(),
         "history": trainer.state.history,
     }
@@ -252,6 +263,7 @@ class Trainer:
         self.early_stopping = self._build_early_stopping()
         self.writer = self._build_tensorboard_writer()
         self._configure_file_logging()
+        self.optimized_thresholds: Optional[np.ndarray] = None
 
     def _resolve_device(self) -> torch.device:
         """Resolve the compute device from configuration."""
@@ -335,7 +347,7 @@ class Trainer:
         if not self.config.logging.log_to_file:
             return
 
-        log_path = self.config.paths.results_dir / self.config.logging.log_filename
+        log_path = self.config.paths.training_log_file_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         file_handler = logging.FileHandler(log_path, encoding="utf-8")
@@ -371,7 +383,7 @@ class Trainer:
         """Run the full training loop.
 
         Args:
-            resume: When ``True``, resume from ``checkpoints/last_model.pth``.
+            resume: When ``True``, resume from ``Models/last_model.pth``.
 
         Returns:
             DataFrame containing epoch-wise training history.
@@ -418,7 +430,7 @@ class Trainer:
             self._log_epoch_to_tensorboard(epoch_record, epoch)
             save_training_log_csv(
                 self.state.history,
-                self.config.paths.results_dir / "training_log.csv",
+                self.config.paths.training_log_path,
             )
 
             epoch_time = time.time() - epoch_start
@@ -445,9 +457,29 @@ class Trainer:
         logger.info("Training finished in %.2f seconds.", total_time)
 
         history_df = pd.DataFrame(self.state.history)
+        best_epoch = self._find_best_epoch(history_df)
+        save_training_summary_csv(
+            history=self.state.history,
+            output_path=self.config.paths.training_summary_path,
+            best_metric=self.state.best_metric,
+            best_epoch=best_epoch,
+        )
         self._save_training_artifacts(history_df)
         self.close()
         return history_df
+
+    def _find_best_epoch(self, history_df: pd.DataFrame) -> Optional[int]:
+        """Return the epoch number with the best monitored validation metric."""
+        monitor = self.config.training.early_stopping_monitor
+        if monitor not in history_df.columns or history_df.empty:
+            return None
+
+        series = history_df[monitor]
+        if self.config.training.early_stopping_mode == "min":
+            best_index = int(series.idxmin())
+        else:
+            best_index = int(series.idxmax())
+        return int(history_df.iloc[best_index]["epoch"])
 
     def train(self, resume: bool = False) -> pd.DataFrame:
         """Backward-compatible alias for :meth:`fit`.
@@ -524,16 +556,17 @@ class Trainer:
 
     @torch.no_grad()
     def validate(self, epoch: Optional[int] = None) -> MetricsResult:
-        """Run validation and compute metrics.
+        """Run validation, optimize thresholds, and export epoch artifacts.
 
         Args:
-            epoch: Optional epoch index for logging.
+            epoch: Optional epoch index for logging and artifact naming.
 
         Returns:
-            Computed validation ``MetricsResult``.
+            Computed validation ``MetricsResult`` using optimized thresholds when enabled.
         """
         self.model.eval()
         accumulator = MetricsAccumulator()
+        image_paths: List[str] = []
 
         progress = tqdm(
             self.val_loader,
@@ -554,8 +587,49 @@ class Trainer:
                 labels=labels,
                 loss=float(loss.item()),
             )
+            image_paths.extend([str(path) for path in batch["image_path"]])
 
-        metrics = accumulator.compute(threshold=self.config.training.threshold)
+        labels_array, probabilities, mean_loss = accumulator.get_arrays()
+        threshold_values: Union[float, np.ndarray] = self.config.training.threshold
+
+        if self.config.training.optimize_thresholds_on_val:
+            self.optimized_thresholds = search_best_thresholds(
+                y_true=labels_array,
+                y_probs=probabilities,
+                config=self.config.evaluation,
+            )
+            threshold_values = self.optimized_thresholds
+            save_best_thresholds_csv(
+                thresholds=self.optimized_thresholds,
+                output_path=self.config.paths.thresholds_csv_path,
+            )
+
+        metrics = compute_metrics(
+            y_true=labels_array,
+            y_probs=probabilities,
+            threshold=threshold_values,
+            loss=mean_loss,
+        )
+        metrics.best_thresholds = self.optimized_thresholds
+
+        validation_dir = self.config.paths.results_dir
+        save_validation_epoch_artifacts(
+            y_true=labels_array,
+            y_probs=probabilities,
+            metrics=metrics,
+            output_dir=validation_dir,
+            config=self.config,
+            epoch=(epoch + 1) if epoch is not None else None,
+            image_paths=image_paths,
+            thresholds=threshold_values if isinstance(threshold_values, np.ndarray) else None,
+            split_name="validation",
+        )
+
+        save_metrics_csv(
+            metrics,
+            self.config.paths.metrics_csv_path,
+            split_name="validation",
+        )
 
         if epoch is not None:
             logger.info(
@@ -570,20 +644,15 @@ class Trainer:
                 metrics.accuracy,
             )
 
-        save_metrics_csv(
-            metrics,
-            self.config.paths.results_dir / "validation_metrics.csv",
-            split_name="validation",
-        )
         return metrics
 
     def save_checkpoint(self, is_best: bool, epoch: int) -> None:
         """Save last, per-epoch, and optional best model checkpoints.
 
         Saves:
-        - ``checkpoints/last_model.pth`` every epoch
-        - ``checkpoints/checkpoint_epoch_XXX.pth`` when enabled
-        - ``checkpoints/best_model.pth`` when validation metric improves
+        - ``Models/last_model.pth`` every epoch
+        - ``Models/checkpoint_epoch_XXX.pth`` when enabled
+        - ``Models/best_model.pth`` when validation metric improves
 
         Args:
             is_best: Whether the current epoch produced the best monitored metric.
@@ -665,6 +734,10 @@ class Trainer:
         )
         self.state.history = list(checkpoint.get("history", []))
 
+        optimized = checkpoint.get("optimized_thresholds")
+        if optimized is not None:
+            self.optimized_thresholds = np.asarray(optimized, dtype=np.float32)
+
         if self.early_stopping is not None:
             self.early_stopping.best_score = float(
                 checkpoint.get("best_metric", self.early_stopping.best_score or 0.0)
@@ -679,7 +752,7 @@ class Trainer:
         )
 
     def resume_training(self) -> None:
-        """Resume training from ``checkpoints/last_model.pth`` if it exists."""
+        """Resume training from ``Models/last_model.pth`` if it exists."""
         checkpoint_path = self.config.paths.last_model_path
         if checkpoint_path.exists():
             self.load_checkpoint(checkpoint_path)
@@ -716,9 +789,9 @@ class Trainer:
 
         save_training_log_csv(
             self.state.history,
-            results_dir / "training_log.csv",
+            self.config.paths.training_log_path,
         )
-        save_training_plots(history_df, results_dir)
+        save_training_plots(history_df, self.config.paths.results_dir)
         logger.info("Saved training artifacts to %s.", results_dir)
 
     def close(self) -> None:

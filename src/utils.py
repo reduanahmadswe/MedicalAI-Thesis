@@ -96,8 +96,7 @@ def setup_logging(
         config.logging.log_to_file if log_to_file is None else log_to_file
     )
     if enable_file_logging:
-        file_name = log_filename or config.logging.log_filename
-        log_path = config.paths.results_dir / file_name
+        log_path = config.paths.training_log_file_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not any(
@@ -336,9 +335,7 @@ def save_config_json(
         Path to the saved configuration file.
     """
     config = config or get_default_config()
-    destination = Path(output_path) if output_path is not None else (
-        config.paths.results_dir / "config.json"
-    )
+    destination = Path(output_path) if output_path is not None else config.paths.config_json_path
     save_json(config.to_dict(), destination)
     return destination
 
@@ -554,7 +551,10 @@ def print_config_summary(config: Optional[Config] = None) -> None:
         f"Train CSV: {config.paths.train_csv}",
         f"Val CSV: {config.paths.val_csv}",
         f"Test CSV: {config.paths.test_csv}",
+        f"Models Dir: {config.paths.checkpoint_dir}",
         f"Results Dir: {config.paths.results_dir}",
+        f"TensorBoard Dir: {config.paths.tensorboard_dir}",
+        f"Logs Dir: {config.paths.logs_dir}",
         "=============================",
     ]
     for line in summary_lines:

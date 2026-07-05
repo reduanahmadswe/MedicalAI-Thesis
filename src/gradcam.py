@@ -11,7 +11,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -454,6 +454,7 @@ class GradCAMExplainer:
     ) -> None:
         """Initialize the explainer."""
         self.config = config or get_default_config()
+        self.config.setup()
         self.device = torch.device(
             device
             if device is not None
@@ -578,8 +579,7 @@ class GradCAMExplainer:
         )
 
         output_directory = Path(output_dir) if output_dir is not None else (
-            self.config.paths.results_dir
-            / self.config.gradcam.output_subdir
+            self.config.paths.gradcam_dir
         )
         output_directory.mkdir(parents=True, exist_ok=True)
 
@@ -647,6 +647,46 @@ class GradCAMExplainer:
                 )
             results.append(result)
 
+        return results
+
+    def explain_batch_and_save(
+        self,
+        image_paths: Sequence[Union[str, Path]],
+        output_dir: Optional[Union[str, Path]] = None,
+        threshold: Optional[float] = None,
+    ) -> List[GradCAMResult]:
+        """Generate and save Grad-CAM explanations for multiple images.
+
+        Args:
+            image_paths: Sequence of Chest X-ray image paths.
+            output_dir: Optional base output directory.
+            threshold: Optional decision threshold for target class selection.
+
+        Returns:
+            List of ``GradCAMResult`` objects, one per image.
+        """
+        if not image_paths:
+            raise ValueError("image_paths must contain at least one path.")
+
+        output_directory = Path(output_dir) if output_dir is not None else (
+            self.config.paths.gradcam_dir / "batch"
+        )
+        output_directory.mkdir(parents=True, exist_ok=True)
+
+        results: List[GradCAMResult] = []
+        for image_path in image_paths:
+            result = self.explain_and_save(
+                image_path=image_path,
+                output_dir=output_directory / Path(image_path).stem,
+                threshold=threshold,
+            )
+            results.append(result)
+
+        logger.info(
+            "Saved %d Grad-CAM explainability outputs to %s.",
+            len(results),
+            output_directory,
+        )
         return results
 
     def close(self) -> None:
@@ -744,3 +784,41 @@ def generate_gradcam_for_image(
         target_class_index=target_class_index,
         save=True,
     )
+
+
+def explain_batch_and_save(
+    image_paths: Sequence[Union[str, Path]],
+    config: Optional[Config] = None,
+    checkpoint_path: Optional[Union[str, Path]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
+    method: Optional[str] = None,
+    threshold: Optional[float] = None,
+) -> List[GradCAMResult]:
+    """Generate and save Grad-CAM explanations for a batch of images.
+
+    Args:
+        image_paths: Sequence of Chest X-ray image paths.
+        config: Optional project configuration.
+        checkpoint_path: Optional model checkpoint path.
+        output_dir: Optional output directory.
+        method: Optional CAM method override (``gradcam`` or ``gradcam++``).
+        threshold: Optional decision threshold.
+
+    Returns:
+        List of ``GradCAMResult`` objects.
+    """
+    config = config or get_default_config()
+    if method is not None:
+        from dataclasses import replace
+
+        config = replace(config, gradcam=replace(config.gradcam, method=method))
+
+    explainer = GradCAMExplainer(config=config, checkpoint_path=checkpoint_path)
+    try:
+        return explainer.explain_batch_and_save(
+            image_paths=image_paths,
+            output_dir=output_dir,
+            threshold=threshold,
+        )
+    finally:
+        explainer.close()

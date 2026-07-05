@@ -174,6 +174,35 @@ class Evaluator:
         self.loss_fn = build_loss(config=self.config, device=self.device)
         self.optimized_thresholds: Optional[np.ndarray] = None
 
+        self.test_loader = create_dataloader(
+            split="test",
+            config=self.config,
+            shuffle=False,
+        )
+
+    def load_best_model(self, checkpoint_path: Optional[Union[str, Path]] = None) -> None:
+        """Load the best model checkpoint for evaluation.
+
+        Args:
+            checkpoint_path: Optional override path. Defaults to ``best_model.pth``.
+
+        Raises:
+            FileNotFoundError: If the checkpoint does not exist.
+        """
+        self.checkpoint_path = (
+            Path(checkpoint_path)
+            if checkpoint_path is not None
+            else self.config.paths.best_model_path
+        )
+        self._load_model_from_checkpoint()
+        self.model = move_model_to_device(
+            self.model,
+            device=self.device,
+            enable_multi_gpu=False,
+        )
+        self.model.eval()
+        logger.info("Loaded best model from %s.", self.checkpoint_path)
+
     def _resolve_device(self, device: Optional[Union[str, torch.device]]) -> torch.device:
         """Resolve compute device from override or configuration."""
         if device is not None:
@@ -260,7 +289,7 @@ class Evaluator:
             ``EvaluationReport`` for the evaluated split.
         """
         split_value = normalize_split_name(split)
-        output_dir = self.config.paths.results_dir / (output_subdir or split_value)
+        output_dir = self.config.paths.results_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
         labels, probabilities, image_paths, mean_loss = self.run_split_inference(split=split)
@@ -325,7 +354,7 @@ class Evaluator:
                 y_probs=probabilities,
                 config=self.config.evaluation,
             )
-            thresholds_path = self.config.paths.results_dir / "best_thresholds.csv"
+            thresholds_path = self.config.paths.thresholds_csv_path
             save_best_thresholds_csv(
                 thresholds=self.optimized_thresholds,
                 output_path=thresholds_path,
@@ -342,11 +371,13 @@ class Evaluator:
     def test(
         self,
         thresholds: Optional[Union[float, Sequence[float], np.ndarray]] = None,
+        dataloader: Optional[DataLoader] = None,
     ) -> EvaluationReport:
-        """Run held-out test evaluation.
+        """Run held-out test evaluation using the test DataLoader.
 
         Args:
             thresholds: Optional thresholds. Uses optimized validation thresholds when absent.
+            dataloader: Optional test DataLoader override. Defaults to ``self.test_loader``.
 
         Returns:
             Test ``EvaluationReport``.
@@ -355,16 +386,45 @@ class Evaluator:
         if threshold_values is None:
             threshold_values = self._load_thresholds_if_available()
 
-        report = self.evaluate_split(
+        loader = dataloader or self.test_loader
+        labels, probabilities, image_paths, mean_loss = self.run_split_inference(
             split=SplitName.TEST,
-            thresholds=threshold_values,
-            output_subdir="test",
+            dataloader=loader,
         )
-        return report
+
+        output_dir = self.config.paths.results_dir
+        metrics = export_evaluation_artifacts(
+            y_true=labels,
+            y_probs=probabilities,
+            output_dir=output_dir,
+            config=self.config,
+            split_name="test",
+            image_paths=image_paths,
+            loss=mean_loss,
+            thresholds=threshold_values,
+        )
+
+        if isinstance(threshold_values, (float, int)):
+            threshold_array = np.full(len(NIH_DISEASE_LABELS), float(threshold_values))
+        else:
+            threshold_array = np.asarray(threshold_values, dtype=np.float32)
+
+        logger.info(
+            "Test evaluation complete. macro_auroc=%.4f, f1_macro=%.4f.",
+            metrics.auroc_macro,
+            metrics.f1_macro,
+        )
+
+        return EvaluationReport(
+            split_name="test",
+            metrics=metrics,
+            thresholds=threshold_array,
+            output_dir=output_dir,
+        )
 
     def _load_thresholds_if_available(self) -> Union[float, np.ndarray]:
         """Load optimized thresholds from disk when available."""
-        thresholds_path = self.config.paths.results_dir / "best_thresholds.csv"
+        thresholds_path = self.config.paths.thresholds_csv_path
         if thresholds_path.exists():
             try:
                 thresholds_df = pd.read_csv(thresholds_path)
@@ -480,7 +540,7 @@ class Evaluator:
         )
 
         if save_csv:
-            csv_path = output_path or (self.config.paths.results_dir / "batch_predictions.csv")
+            csv_path = output_path or self.config.paths.predictions_csv_path
             result_df = result.to_dataframe()
             csv_path = Path(csv_path)
             csv_path.parent.mkdir(parents=True, exist_ok=True)

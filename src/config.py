@@ -18,9 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Project root resolution
+# Google Drive root (Colab persistent storage)
 # ---------------------------------------------------------------------------
 
+GOOGLE_DRIVE_ROOT: Path = Path("/content/drive/MyDrive/MedicalAI-Thesis")
+
+# Code location (may differ from Drive root when running in Colab)
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
@@ -73,51 +76,70 @@ NUM_CLASSES: int = len(NIH_DISEASE_LABELS)
 class PathConfig:
     """Filesystem paths for datasets, checkpoints, logs, and experiment outputs.
 
+    All persistent artifacts are stored under Google Drive so training outputs
+    survive Colab session restarts.
+
     Attributes:
-        project_root: Root directory of the research project.
+        google_drive_root: Root Google Drive project folder.
+        project_root: Local code/project directory.
         data_root: Directory containing train/val/test CSV splits and images.
         train_csv: Path to the training split CSV file.
         val_csv: Path to the validation split CSV file.
         test_csv: Path to the test split CSV file.
         image_column: Column name containing relative or absolute image paths.
         label_columns: Column names used as multi-label targets.
-        checkpoint_dir: Directory for model checkpoints.
-        results_dir: Directory for metrics, plots, and prediction exports.
+        checkpoint_dir: Directory for model checkpoints (``Models/``).
+        results_dir: Directory for metrics, plots, and CSV exports (``Results/``).
         tensorboard_dir: Directory for TensorBoard event files.
+        logs_dir: Directory for training log files (``Logs/``).
+        roc_dir: Directory for ROC curve plots.
+        confusion_matrix_dir: Directory for confusion matrix plots.
+        gradcam_dir: Directory for Grad-CAM explainability outputs.
         best_model_filename: Filename for the best-performing checkpoint.
         last_model_filename: Filename for the most recent (last) checkpoint.
         epoch_checkpoint_prefix: Prefix for per-epoch checkpoint files.
     """
 
+    google_drive_root: Path = GOOGLE_DRIVE_ROOT
     project_root: Path = PROJECT_ROOT
 
-    # Google Drive dataset (Colab)
-    data_root: Path = Path("/content/drive/MyDrive/MedicalAI-Thesis/Dataset")
-
+    data_root: Path = field(
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Dataset"
+    )
     train_csv: Path = field(
-        default_factory=lambda: Path(
-            "/content/drive/MyDrive/MedicalAI-Thesis/Dataset/train.csv"
-        )
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Dataset" / "train.csv"
     )
     val_csv: Path = field(
-        default_factory=lambda: Path(
-            "/content/drive/MyDrive/MedicalAI-Thesis/Dataset/val.csv"
-        )
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Dataset" / "val.csv"
     )
     test_csv: Path = field(
-        default_factory=lambda: Path(
-            "/content/drive/MyDrive/MedicalAI-Thesis/Dataset/test.csv"
-        )
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Dataset" / "test.csv"
     )
     image_column: str = "Image_Path"
     label_columns: Tuple[str, ...] = NIH_DISEASE_LABELS
+
     checkpoint_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / "checkpoints"
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Models"
     )
-    results_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "results")
+    results_dir: Path = field(
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Results"
+    )
     tensorboard_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / "results" / "tensorboard"
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "TensorBoard"
     )
+    logs_dir: Path = field(
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Logs"
+    )
+    roc_dir: Path = field(
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Results" / "ROC"
+    )
+    confusion_matrix_dir: Path = field(
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Results" / "ConfusionMatrix"
+    )
+    gradcam_dir: Path = field(
+        default_factory=lambda: GOOGLE_DRIVE_ROOT / "Results" / "GradCAM"
+    )
+
     best_model_filename: str = "best_model.pth"
     last_model_filename: str = "last_model.pth"
     epoch_checkpoint_prefix: str = "checkpoint_epoch_"
@@ -153,18 +175,57 @@ class PathConfig:
             epoch: One-based epoch index (e.g., 1, 2, 3).
 
         Returns:
-            Path such as ``checkpoints/checkpoint_epoch_001.pth``.
+            Path such as ``Models/checkpoint_epoch_001.pth``.
         """
         if epoch <= 0:
             raise ValueError("epoch must be a positive integer.")
         return self.checkpoint_dir / f"{self.epoch_checkpoint_prefix}{epoch:03d}.pth"
 
+    @property
+    def training_log_path(self) -> Path:
+        """Return path to ``Results/training_log.csv``."""
+        return self.results_dir / "training_log.csv"
+
+    @property
+    def training_summary_path(self) -> Path:
+        """Return path to ``Results/training_summary.csv``."""
+        return self.results_dir / "training_summary.csv"
+
+    @property
+    def metrics_csv_path(self) -> Path:
+        """Return path to ``Results/metrics.csv``."""
+        return self.results_dir / "metrics.csv"
+
+    @property
+    def predictions_csv_path(self) -> Path:
+        """Return path to ``Results/predictions.csv``."""
+        return self.results_dir / "predictions.csv"
+
+    @property
+    def thresholds_csv_path(self) -> Path:
+        """Return path to ``Results/thresholds.csv``."""
+        return self.results_dir / "thresholds.csv"
+
+    @property
+    def training_log_file_path(self) -> Path:
+        """Return path to ``Logs/training.log``."""
+        return self.logs_dir / "training.log"
+
+    @property
+    def config_json_path(self) -> Path:
+        """Return path to ``Results/config.json``."""
+        return self.results_dir / "config.json"
+
     def ensure_directories(self) -> None:
-        """Create output directories if they do not exist."""
+        """Create all Google Drive output directories if they do not exist."""
         for directory in (
             self.checkpoint_dir,
             self.results_dir,
             self.tensorboard_dir,
+            self.logs_dir,
+            self.roc_dir,
+            self.confusion_matrix_dir,
+            self.gradcam_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
             logger.debug("Ensured directory exists: %s", directory)
@@ -336,6 +397,10 @@ class TrainingConfig:
         log_interval: Log training metrics every N batches.
         eval_interval: Run validation every N epochs (1 = every epoch).
         threshold: Default decision threshold for multi-label predictions.
+        optimize_thresholds_on_val: Search per-class thresholds on validation each epoch.
+        save_val_roc_each_epoch: Save validation ROC curves after every epoch.
+        save_val_confusion_matrix_each_epoch: Save validation confusion matrices each epoch.
+        save_val_classification_report_each_epoch: Save classification report each epoch.
         random_seed: Global random seed for reproducibility.
         deterministic: Enable deterministic algorithms where supported.
     """
@@ -355,6 +420,10 @@ class TrainingConfig:
     log_interval: int = 50
     eval_interval: int = 1
     threshold: float = 0.5
+    optimize_thresholds_on_val: bool = True
+    save_val_roc_each_epoch: bool = False
+    save_val_confusion_matrix_each_epoch: bool = True
+    save_val_classification_report_each_epoch: bool = True
     random_seed: int = 42
     deterministic: bool = True
 
@@ -417,6 +486,7 @@ class EvaluationConfig:
         save_roc_curves: Export ROC curve plots.
         save_pr_curves: Export precision-recall curve plots.
         save_confusion_matrices: Export confusion matrix plots.
+        save_classification_report: Export sklearn-style classification report.
     """
 
     batch_size: int = 32
@@ -430,6 +500,7 @@ class EvaluationConfig:
     save_roc_curves: bool = True
     save_pr_curves: bool = True
     save_confusion_matrices: bool = True
+    save_classification_report: bool = True
 
     def __post_init__(self) -> None:
         """Validate evaluation configuration values."""
@@ -456,7 +527,7 @@ class GradCAMConfig:
         target_class_index: Fixed class index for CAM (overrides prediction).
         colormap: Matplotlib colormap name for heatmap visualization.
         alpha: Blending weight for heatmap overlay on original image.
-        output_subdir: Subdirectory under results_dir for CAM artifacts.
+        output_subdir: Optional subdirectory under ``gradcam_dir`` for CAM artifacts.
     """
 
     method: str = "gradcam"
@@ -491,7 +562,7 @@ class LoggingConfig:
     Attributes:
         experiment_name: Human-readable experiment identifier.
         log_level: Python logging level name.
-        log_to_file: Persist logs to disk under results_dir.
+        log_to_file: Persist logs to disk under ``Logs/`` on Google Drive.
         log_filename: Log file name when log_to_file is enabled.
         tensorboard_enabled: Enable TensorBoard scalar and image logging.
         log_gpu_memory: Log peak GPU memory usage during training.

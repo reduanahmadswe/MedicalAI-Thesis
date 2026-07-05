@@ -18,6 +18,7 @@ import torch
 from sklearn.metrics import (
     accuracy_score,
     auc,
+    classification_report,
     confusion_matrix,
     f1_score,
     precision_recall_curve,
@@ -587,6 +588,313 @@ def save_metrics_csv(
     logger.info("Saved metrics CSV files to %s.", output_dir)
 
 
+def build_classification_report_dataframe(
+    y_true: ArrayLike,
+    y_probs: ArrayLike,
+    threshold: Union[float, Sequence[float], np.ndarray] = 0.5,
+    class_names: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """Build a multi-label classification report as a pandas DataFrame.
+
+    Uses scikit-learn ``classification_report`` per disease class with
+    precision, recall, F1-score, and support.
+
+    Args:
+        y_true: Ground-truth labels of shape ``(N, C)``.
+        y_probs: Predicted probabilities of shape ``(N, C)``.
+        threshold: Scalar or per-class decision thresholds.
+        class_names: Optional disease class names.
+
+    Returns:
+        DataFrame containing per-class and summary metrics.
+    """
+    labels, probabilities = _validate_shapes(y_true, y_probs)
+    predictions = binarize_predictions(probabilities, threshold=threshold)
+    names = list(class_names or NIH_DISEASE_LABELS)
+
+    report_dict = classification_report(
+        labels,
+        predictions,
+        target_names=names,
+        output_dict=True,
+        zero_division=0,
+    )
+
+    rows: List[Dict[str, Union[str, float, int]]] = []
+    for class_name in names:
+        class_stats = report_dict.get(class_name, {})
+        rows.append(
+            {
+                "class": class_name,
+                "precision": float(class_stats.get("precision", 0.0)),
+                "recall": float(class_stats.get("recall", 0.0)),
+                "f1-score": float(class_stats.get("f1-score", 0.0)),
+                "support": int(class_stats.get("support", 0)),
+            }
+        )
+
+    for summary_key in ("micro avg", "macro avg", "weighted avg"):
+        if summary_key in report_dict:
+            summary_stats = report_dict[summary_key]
+            rows.append(
+                {
+                    "class": summary_key,
+                    "precision": float(summary_stats.get("precision", 0.0)),
+                    "recall": float(summary_stats.get("recall", 0.0)),
+                    "f1-score": float(summary_stats.get("f1-score", 0.0)),
+                    "support": int(summary_stats.get("support", 0)),
+                }
+            )
+
+    return pd.DataFrame.from_records(rows)
+
+
+def save_classification_report_csv(
+    y_true: ArrayLike,
+    y_probs: ArrayLike,
+    output_path: Union[str, Path],
+    threshold: Union[float, Sequence[float], np.ndarray] = 0.5,
+    class_names: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """Save a multi-label classification report to CSV.
+
+    Args:
+        y_true: Ground-truth labels of shape ``(N, C)``.
+        y_probs: Predicted probabilities of shape ``(N, C)``.
+        output_path: Destination CSV file path.
+        threshold: Scalar or per-class decision thresholds.
+        class_names: Optional disease class names.
+
+    Returns:
+        Classification report DataFrame.
+
+    Raises:
+        OSError: If writing the CSV fails.
+    """
+    report_df = build_classification_report_dataframe(
+        y_true=y_true,
+        y_probs=y_probs,
+        threshold=threshold,
+        class_names=class_names,
+    )
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        report_df.to_csv(output_path, index=False)
+    except Exception as exc:
+        logger.exception("Failed to save classification report CSV to %s.", output_path)
+        raise OSError(f"Unable to save classification report to {output_path}") from exc
+
+    logger.info("Saved classification report CSV to %s.", output_path)
+    return report_df
+
+
+def save_classification_report_txt(
+    y_true: ArrayLike,
+    y_probs: ArrayLike,
+    output_path: Union[str, Path],
+    threshold: Union[float, Sequence[float], np.ndarray] = 0.5,
+    class_names: Optional[Sequence[str]] = None,
+) -> str:
+    """Save a sklearn-style classification report as a plain-text file.
+
+    Args:
+        y_true: Ground-truth labels of shape ``(N, C)``.
+        y_probs: Predicted probabilities of shape ``(N, C)``.
+        output_path: Destination text file path.
+        threshold: Scalar or per-class decision thresholds.
+        class_names: Optional disease class names.
+
+    Returns:
+        Classification report string.
+
+    Raises:
+        OSError: If writing the file fails.
+    """
+    labels, probabilities = _validate_shapes(y_true, y_probs)
+    predictions = binarize_predictions(probabilities, threshold=threshold)
+    names = list(class_names or NIH_DISEASE_LABELS)
+
+    report_text = classification_report(
+        labels,
+        predictions,
+        target_names=names,
+        zero_division=0,
+    )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        output_path.write_text(report_text, encoding="utf-8")
+    except Exception as exc:
+        logger.exception("Failed to save classification report TXT to %s.", output_path)
+        raise OSError(f"Unable to save classification report to {output_path}") from exc
+
+    logger.info("Saved classification report TXT to %s.", output_path)
+    return report_text
+
+
+def save_validation_epoch_artifacts(
+    y_true: ArrayLike,
+    y_probs: ArrayLike,
+    metrics: MetricsResult,
+    output_dir: Union[str, Path],
+    config: Optional[Config] = None,
+    epoch: Optional[int] = None,
+    image_paths: Optional[Sequence[str]] = None,
+    thresholds: Optional[ArrayLike] = None,
+    split_name: str = "validation",
+) -> None:
+    """Save validation artifacts for a single training epoch.
+
+    Args:
+        y_true: Ground-truth labels of shape ``(N, C)``.
+        y_probs: Predicted probabilities of shape ``(N, C)``.
+        metrics: Computed validation metrics.
+        output_dir: Base output directory for validation artifacts.
+        config: Optional project configuration.
+        epoch: Optional one-based epoch number for subdirectory naming.
+        image_paths: Optional image paths for prediction CSV export.
+        thresholds: Threshold values used for binarized metrics.
+        split_name: Split identifier used in filenames.
+    """
+    config = config or get_default_config()
+    paths = config.paths
+    paths.ensure_directories()
+
+    threshold_values = (
+        _normalize_thresholds(thresholds)
+        if thresholds is not None
+        else _normalize_thresholds(metrics.thresholds)
+    )
+
+    save_metrics_csv(metrics, paths.metrics_csv_path, split_name=split_name)
+
+    if config.evaluation.save_predictions and image_paths is not None:
+        save_predictions_csv(
+            y_true=y_true,
+            y_probs=y_probs,
+            image_paths=image_paths,
+            output_path=paths.predictions_csv_path,
+            threshold=threshold_values,
+        )
+
+    if thresholds is not None:
+        save_best_thresholds_csv(thresholds, paths.thresholds_csv_path)
+
+    save_roc = config.training.save_val_roc_each_epoch or config.evaluation.save_roc_curves
+    if save_roc:
+        roc_filename = (
+            f"epoch_{epoch:03d}_roc.png"
+            if epoch is not None
+            else f"{split_name}_roc.png"
+        )
+        plot_roc_curves(
+            y_true=y_true,
+            y_probs=y_probs,
+            output_path=paths.roc_dir / roc_filename,
+            title=f"{split_name.capitalize()} ROC Curves"
+            + (f" (Epoch {epoch})" if epoch is not None else ""),
+        )
+
+    if config.evaluation.save_pr_curves:
+        pr_filename = (
+            f"epoch_{epoch:03d}_pr.png"
+            if epoch is not None
+            else f"{split_name}_pr.png"
+        )
+        plot_precision_recall_curves(
+            y_true=y_true,
+            y_probs=y_probs,
+            output_path=paths.results_dir / pr_filename,
+            title=f"{split_name.capitalize()} Precision-Recall Curves"
+            + (f" (Epoch {epoch})" if epoch is not None else ""),
+        )
+
+    save_confusion = (
+        config.training.save_val_confusion_matrix_each_epoch
+        or config.evaluation.save_confusion_matrices
+    )
+    if save_confusion:
+        confusion_filename = (
+            f"epoch_{epoch:03d}_confusion.png"
+            if epoch is not None
+            else f"{split_name}_confusion.png"
+        )
+        plot_confusion_matrices(
+            confusion_matrices=metrics.confusion_matrices,
+            output_path=paths.confusion_matrix_dir / confusion_filename,
+            title=f"{split_name.capitalize()} Confusion Matrices"
+            + (f" (Epoch {epoch})" if epoch is not None else ""),
+        )
+
+    save_report = (
+        config.training.save_val_classification_report_each_epoch
+        or config.evaluation.save_classification_report
+    )
+    if save_report:
+        report_suffix = f"_epoch_{epoch:03d}" if epoch is not None else ""
+        save_classification_report_csv(
+            y_true=y_true,
+            y_probs=y_probs,
+            output_path=paths.results_dir / f"{split_name}_classification_report{report_suffix}.csv",
+            threshold=threshold_values,
+        )
+        save_classification_report_txt(
+            y_true=y_true,
+            y_probs=y_probs,
+            output_path=paths.results_dir / f"{split_name}_classification_report{report_suffix}.txt",
+            threshold=threshold_values,
+        )
+
+
+def save_training_summary_csv(
+    history: List[Dict[str, Any]],
+    output_path: Union[str, Path],
+    best_metric: Optional[float] = None,
+    best_epoch: Optional[int] = None,
+) -> None:
+    """Save a compact training summary CSV for publication and analysis.
+
+    Args:
+        history: List of epoch log dictionaries.
+        output_path: Destination CSV path.
+        best_metric: Optional best monitored validation metric.
+        best_epoch: Optional epoch index where the best metric occurred.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    summary: Dict[str, Any] = {
+        "total_epochs": len(history),
+        "best_metric": best_metric if best_metric is not None else float("nan"),
+        "best_epoch": best_epoch if best_epoch is not None else float("nan"),
+    }
+
+    if history:
+        last_epoch = history[-1]
+        summary.update(
+            {
+                "final_train_loss": last_epoch.get("train_loss"),
+                "final_val_loss": last_epoch.get("val_loss"),
+                "final_auroc": last_epoch.get("auroc"),
+                "final_precision": last_epoch.get("precision"),
+                "final_recall": last_epoch.get("recall"),
+                "final_f1": last_epoch.get("f1"),
+                "final_accuracy": last_epoch.get("accuracy"),
+            }
+        )
+
+    try:
+        pd.DataFrame([summary]).to_csv(output_path, index=False)
+    except Exception as exc:
+        logger.exception("Failed to save training summary CSV.")
+        raise OSError(f"Unable to save training summary to {output_path}") from exc
+
+    logger.info("Saved training summary CSV to %s.", output_path)
+
+
 def save_predictions_csv(
     y_true: ArrayLike,
     y_probs: ArrayLike,
@@ -1134,8 +1442,8 @@ def export_evaluation_artifacts(
         Computed ``MetricsResult``.
     """
     config = config or get_default_config()
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    paths = config.paths
+    paths.ensure_directories()
 
     eval_config = config.evaluation
     threshold_values = (
@@ -1151,28 +1459,28 @@ def export_evaluation_artifacts(
         loss=loss,
     )
 
-    save_metrics_csv(metrics, output_dir / f"{split_name}_metrics.csv", split_name=split_name)
+    save_metrics_csv(metrics, paths.metrics_csv_path, split_name=split_name)
 
     if eval_config.save_predictions and image_paths is not None:
         save_predictions_csv(
             y_true=y_true,
             y_probs=y_probs,
             image_paths=image_paths,
-            output_path=output_dir / "predictions.csv",
+            output_path=paths.predictions_csv_path,
             threshold=threshold_values,
         )
 
     if metrics.best_thresholds is not None or thresholds is not None:
         save_best_thresholds_csv(
             thresholds if thresholds is not None else metrics.best_thresholds,
-            output_path=output_dir / "best_thresholds.csv",
+            output_path=paths.thresholds_csv_path,
         )
 
     if eval_config.save_roc_curves:
         plot_roc_curves(
             y_true=y_true,
             y_probs=y_probs,
-            output_path=output_dir / f"{split_name}_roc_curves.png",
+            output_path=paths.roc_dir / f"{split_name}_roc.png",
             title=f"{split_name.capitalize()} ROC Curves",
         )
 
@@ -1180,15 +1488,29 @@ def export_evaluation_artifacts(
         plot_precision_recall_curves(
             y_true=y_true,
             y_probs=y_probs,
-            output_path=output_dir / f"{split_name}_pr_curves.png",
+            output_path=paths.results_dir / f"{split_name}_pr.png",
             title=f"{split_name.capitalize()} Precision-Recall Curves",
         )
 
     if eval_config.save_confusion_matrices:
         plot_confusion_matrices(
             confusion_matrices=metrics.confusion_matrices,
-            output_path=output_dir / f"{split_name}_confusion_matrices.png",
+            output_path=paths.confusion_matrix_dir / f"{split_name}_confusion.png",
             title=f"{split_name.capitalize()} Confusion Matrices",
+        )
+
+    if eval_config.save_classification_report:
+        save_classification_report_csv(
+            y_true=y_true,
+            y_probs=y_probs,
+            output_path=paths.results_dir / f"{split_name}_classification_report.csv",
+            threshold=threshold_values,
+        )
+        save_classification_report_txt(
+            y_true=y_true,
+            y_probs=y_probs,
+            output_path=paths.results_dir / f"{split_name}_classification_report.txt",
+            threshold=threshold_values,
         )
 
     return metrics
