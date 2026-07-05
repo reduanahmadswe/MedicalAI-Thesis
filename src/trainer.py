@@ -201,6 +201,7 @@ class Trainer:
         model: Optional[nn.Module] = None,
         train_loader: Optional[DataLoader] = None,
         val_loader: Optional[DataLoader] = None,
+        test_loader: Optional[DataLoader] = None,
         loss_fn: Optional[nn.Module] = None,
     ) -> None:
         """Initialize the trainer and runtime dependencies."""
@@ -220,6 +221,9 @@ class Trainer:
         )
         self.val_loader = val_loader or create_dataloader(
             SplitName.VAL, config=self.config, shuffle=False
+        )
+        self.test_loader = test_loader or create_dataloader(
+            split="test", config=self.config, shuffle=False
         )
 
         self.model = model or build_model(config=self.config)
