@@ -90,14 +90,24 @@ class PathConfig:
 
     project_root: Path = PROJECT_ROOT
 
-# Dataset stored in Google Drive
+    # Google Drive dataset (Colab)
     data_root: Path = Path("/content/drive/MyDrive/MedicalAI-Thesis/Dataset")
-    
-    train_csv: Path = data_root / "train.csv"
-    
-    val_csv: Path = data_root / "val.csv"
-    
-    test_csv: Path = data_root / "test.csv"
+
+    train_csv: Path = field(
+        default_factory=lambda: Path(
+            "/content/drive/MyDrive/MedicalAI-Thesis/Dataset/train.csv"
+        )
+    )
+    val_csv: Path = field(
+        default_factory=lambda: Path(
+            "/content/drive/MyDrive/MedicalAI-Thesis/Dataset/val.csv"
+        )
+    )
+    test_csv: Path = field(
+        default_factory=lambda: Path(
+            "/content/drive/MyDrive/MedicalAI-Thesis/Dataset/test.csv"
+        )
+    )
     image_column: str = "Image_Path"
     label_columns: Tuple[str, ...] = NIH_DISEASE_LABELS
     checkpoint_dir: Path = field(
