@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from src.config import Config, PathConfig, SplitName, get_default_config
 from src.transforms import TransformPipeline, get_transforms
+from src.utils import normalize_split_name
 
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 SampleDict = Dict[str, Union[torch.Tensor, str, int]]
 
 
-def _split_to_csv_path(split: Union[SplitName, str], paths: PathConfig) -> Path:
+def _split_to_csv_path(split: Union[str, Any], paths: PathConfig) -> Path:
     """Map a split identifier to its configured CSV path.
 
     Args:
@@ -39,16 +40,12 @@ def _split_to_csv_path(split: Union[SplitName, str], paths: PathConfig) -> Path:
     Raises:
         ValueError: If the split name is not recognized.
     """
-    split_value = split.value if isinstance(split, SplitName) else str(split).lower()
+    split_value = normalize_split_name(split)
     split_map = {
-        SplitName.TRAIN.value: paths.train_csv,
-        SplitName.VAL.value: paths.val_csv,
-        SplitName.TEST.value: paths.test_csv,
+        "train": paths.train_csv,
+        "val": paths.val_csv,
+        "test": paths.test_csv,
     }
-    if split_value not in split_map:
-        raise ValueError(
-            f"Unknown split '{split}'. Expected one of: {list(split_map.keys())}."
-        )
     return split_map[split_value]
 
 
@@ -144,7 +141,7 @@ def load_split_dataframe(
 
     logger.info(
         "Loaded %s split with %d samples from %s.",
-        split.value if isinstance(split, SplitName) else split,
+        normalize_split_name(split),
         len(dataframe),
         csv_path,
     )
@@ -519,8 +516,8 @@ def create_dataloader(
         ValueError: If weighted sampling is requested for non-training splits.
     """
     config = config or get_default_config()
-    split_value = split.value if isinstance(split, SplitName) else str(split).lower()
-    is_train = split_value == SplitName.TRAIN.value
+    split_value = normalize_split_name(split)
+    is_train = split_value == "train"
 
     if batch_size is None:
         batch_size = (

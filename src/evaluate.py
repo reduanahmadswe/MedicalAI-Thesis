@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from src.config import Config, NIH_DISEASE_LABELS, SplitName, get_default_config
+from src.utils import normalize_split_name
 from src.dataset import (
     InferenceDataset,
     create_dataloader,
@@ -216,7 +217,7 @@ class Evaluator:
         Returns:
             Tuple of ``(y_true, y_probs, image_paths, mean_loss)``.
         """
-        split_value = split.value if isinstance(split, SplitName) else str(split).lower()
+        split_value = normalize_split_name(split)
         loader = dataloader or create_dataloader(
             split=split,
             config=self.config,
@@ -258,7 +259,7 @@ class Evaluator:
         Returns:
             ``EvaluationReport`` for the evaluated split.
         """
-        split_value = split.value if isinstance(split, SplitName) else str(split).lower()
+        split_value = normalize_split_name(split)
         output_dir = self.config.paths.results_dir / (output_subdir or split_value)
         output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -25,6 +25,40 @@ from src.config import Config, PROJECT_ROOT, get_default_config
 
 logger = logging.getLogger(__name__)
 
+VALID_SPLITS = frozenset({"train", "val", "test"})
+
+
+def normalize_split_name(split: Any) -> str:
+    """Normalize a split identifier to ``train``, ``val``, or ``test``.
+
+    Handles ``SplitName`` enums, plain strings, and Colab reload edge cases
+    where ``isinstance(enum, SplitName)`` may fail across reloaded modules.
+
+    Args:
+        split: Split enum member, string, or compatible identifier.
+
+    Returns:
+        Normalized split string.
+
+    Raises:
+        ValueError: If the split name cannot be recognized.
+    """
+    if isinstance(split, str):
+        split_value = split.strip().lower()
+    elif hasattr(split, "value"):
+        split_value = str(split.value).strip().lower()
+    else:
+        split_value = str(split).strip().lower()
+
+    if split_value.startswith("splitname."):
+        split_value = split_value.split(".", 1)[1]
+
+    if split_value not in VALID_SPLITS:
+        raise ValueError(
+            f"Unknown split '{split}'. Expected one of: {sorted(VALID_SPLITS)}."
+        )
+    return split_value
+
 
 def setup_logging(
     config: Optional[Config] = None,

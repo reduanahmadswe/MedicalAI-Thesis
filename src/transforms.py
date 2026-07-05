@@ -19,6 +19,7 @@ from PIL import Image
 from torchvision.transforms import Compose
 
 from src.config import Config, DataConfig, SplitName, get_default_config
+from src.utils import normalize_split_name
 
 
 logger = logging.getLogger(__name__)
@@ -239,21 +240,17 @@ def get_transforms(
         ValueError: If the split identifier is not recognized.
     """
     config = config or get_default_config()
-    split_value = split.value if isinstance(split, Enum) else str(split).lower()
+    split_value = normalize_split_name(split)
 
-    if split_value == SplitName.TRAIN.value:
+    if split_value == "train":
         return build_train_transforms(data_config=config.data)
-    if split_value in {
-        SplitName.VAL.value,
-        SplitName.TEST.value,
-        TransformMode.INFERENCE.value,
-    }:
+    if split_value in {"val", "test"}:
+        return build_eval_transforms(data_config=config.data)
+    if str(split).lower() == TransformMode.INFERENCE.value:
         return build_eval_transforms(data_config=config.data)
 
     raise ValueError(
-        f"Unknown split '{split}'. Expected one of: "
-        f"{SplitName.TRAIN.value}, {SplitName.VAL.value}, "
-        f"{SplitName.TEST.value}, {TransformMode.INFERENCE.value}."
+        f"Unknown split '{split}'. Expected one of: train, val, test, inference."
     )
 
 
