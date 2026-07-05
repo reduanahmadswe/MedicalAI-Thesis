@@ -36,39 +36,32 @@ class TransformMode(str, Enum):
 
 
 class GrayscaleToRGB:
-    """Convert single-channel or grayscale PIL images to RGB.
+    """Ensure PIL images are converted to RGB before torchvision transforms.
 
-    NIH Chest X-ray images are stored as grayscale PNGs. Pretrained torchvision
-    backbones expect 3-channel input, so grayscale intensities are replicated
-    across RGB channels before normalization.
+    Handles grayscale (``L``), RGBA, palette (``P``), and other PIL modes by
+    converting to RGB. Pretrained backbones expect 3-channel input.
     """
 
     def __call__(self, image: Image.Image) -> Image.Image:
         """Convert an input PIL image to RGB.
 
         Args:
-            image: Input PIL image in ``L``, ``I``, or ``RGB`` mode.
+            image: Input PIL image in any supported mode.
 
         Returns:
             RGB PIL image.
 
         Raises:
             TypeError: If the input is not a PIL Image.
-            ValueError: If the image mode is unsupported.
         """
         if not isinstance(image, Image.Image):
             raise TypeError(
                 f"GrayscaleToRGB expects a PIL Image, got {type(image).__name__}."
             )
 
-        if image.mode == "RGB":
-            return image
-        if image.mode in {"L", "I", "I;16", "F"}:
-            return image.convert("RGB")
-
-        raise ValueError(
-            f"Unsupported image mode '{image.mode}'. Expected grayscale or RGB."
-        )
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        return image
 
 
 class ResizeMaxSide:

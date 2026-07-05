@@ -71,6 +71,65 @@ Expected label columns:
 
 `Atelectasis`, `Cardiomegaly`, `Effusion`, `Infiltration`, `Mass`, `Nodule`, `Pneumonia`, `Pneumothorax`, `Consolidation`, `Edema`, `Emphysema`, `Fibrosis`, `Pleural_Thickening`, `Hernia`, `No Finding`
 
+## DataLoader API (Dictionary-Based)
+
+This project uses a **dictionary-based pipeline**, not tuple unpacking.
+
+Each batch/sample contains:
+
+| Key | Type | Description |
+|---|---|---|
+| `image` | `Tensor (B, 3, H, W)` | Preprocessed image tensor |
+| `labels` | `Tensor (B, 15)` | Multi-hot disease labels |
+| `image_path` | `list[str]` | Resolved image paths |
+| `index` | `list[int]` | Sample indices |
+
+### Load a batch
+
+```python
+from src.dataset import create_dataloader, unpack_batch
+from src.config import SplitName
+
+train_loader = create_dataloader(SplitName.TRAIN)
+
+batch = next(iter(train_loader))
+images = batch["image"]
+labels = batch["labels"]
+paths = batch["image_path"]
+index = batch["index"]
+
+# Or use the helper:
+images, labels, paths, indices = unpack_batch(batch)
+```
+
+### Load a single sample
+
+```python
+from src.dataset import create_dataset, unpack_sample
+
+dataset = create_dataset("train")
+sample = dataset[0]
+image, label, path, idx = unpack_sample(sample)
+```
+
+### Visualize images (denormalized)
+
+```python
+import matplotlib.pyplot as plt
+from src.transforms import tensor_to_pil_image
+
+batch = next(iter(train_loader))
+fig, axes = plt.subplots(3, 3, figsize=(10, 10))
+
+for i, ax in enumerate(axes.flat):
+    pil_img = tensor_to_pil_image(batch["image"][i])
+    ax.imshow(pil_img)
+    ax.axis("off")
+
+plt.tight_layout()
+plt.show()
+```
+
 ## Quick Start
 
 ### 1. Initialize experiment

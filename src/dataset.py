@@ -415,6 +415,54 @@ def collate_fn(batch: Sequence[SampleDict]) -> SampleDict:
     }
 
 
+def unpack_sample(sample: SampleDict) -> Tuple[torch.Tensor, torch.Tensor, str, int]:
+    """Extract fields from a single dataset sample dictionary.
+
+    Args:
+        sample: Sample returned by ``ChestXrayDataset.__getitem__``.
+
+    Returns:
+        Tuple of ``(image, labels, image_path, index)``.
+    """
+    return (
+        sample["image"],
+        sample["labels"],
+        str(sample["image_path"]),
+        int(sample["index"]),
+    )
+
+
+def unpack_batch(
+    batch: SampleDict,
+    device: Optional[torch.device] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, List[str], List[int]]:
+    """Extract fields from a collated batch dictionary.
+
+    Use this helper in notebooks instead of tuple unpacking::
+
+        batch = next(iter(train_loader))
+        images, labels, paths, indices = unpack_batch(batch)
+
+    Args:
+        batch: Batch dictionary returned by the DataLoader collate function.
+        device: Optional device to move tensors to.
+
+    Returns:
+        Tuple of ``(images, labels, image_paths, indices)``.
+    """
+    images = batch["image"]
+    labels = batch["labels"]
+    if device is not None:
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+    return (
+        images,
+        labels,
+        [str(path) for path in batch["image_path"]],
+        [int(index) for index in batch["index"]],
+    )
+
+
 def create_dataset(
     split: Union[SplitName, str],
     config: Optional[Config] = None,

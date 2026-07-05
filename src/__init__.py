@@ -18,6 +18,7 @@ from src.evaluate import (
     evaluate_test,
     evaluate_validation,
 )
+from src.dataset import unpack_batch, unpack_sample
 from src.gradcam import explain_prediction, GradCAMExplainer
 from src.trainer import Trainer, train_model, create_trainer_from_config
 from src.utils import initialize_experiment, setup_logging, set_seed
@@ -37,6 +38,8 @@ __all__ = [
     "run_inference_on_image",
     "evaluate_test",
     "evaluate_validation",
+    "unpack_batch",
+    "unpack_sample",
     "explain_prediction",
     "GradCAMExplainer",
     "Trainer",
