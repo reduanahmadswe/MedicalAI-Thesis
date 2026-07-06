@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from src.config import Config, NIH_DISEASE_LABELS, SplitName, get_default_config
-from src.utils import normalize_split_name
+from src.utils import normalize_split_name, resolve_device
 from src.dataset import (
     InferenceDataset,
     create_dataloader,
@@ -205,16 +205,7 @@ class Evaluator:
 
     def _resolve_device(self, device: Optional[Union[str, torch.device]]) -> torch.device:
         """Resolve compute device from override or configuration."""
-        if device is not None:
-            return torch.device(device)
-
-        requested = self.config.device.device
-        if requested.startswith("cuda") and torch.cuda.is_available():
-            return torch.device(requested if requested != "cuda" else "cuda:0")
-
-        if requested.startswith("cuda"):
-            logger.warning("CUDA requested but unavailable. Falling back to CPU.")
-        return torch.device("cpu")
+        return resolve_device(device=device, config=self.config, fallback_to_cpu=True)
 
     def _load_model_from_checkpoint(self) -> None:
         """Load model weights from the configured checkpoint path."""

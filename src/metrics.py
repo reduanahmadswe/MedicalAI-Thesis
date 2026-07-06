@@ -18,7 +18,6 @@ import torch
 from sklearn.metrics import (
     accuracy_score,
     auc,
-    classification_report,
     confusion_matrix,
     f1_score,
     precision_recall_curve,
@@ -386,6 +385,8 @@ def compute_metrics(
     """
     labels, probabilities = _validate_shapes(y_true, y_probs)
     thresholds = _normalize_thresholds(threshold)
+    predictions = binarize_predictions(probabilities, threshold=thresholds)
+    num_samples = int(labels.shape[0])
 
     subset_accuracy = float(accuracy_score(labels, predictions))
     hamming_accuracy = float(np.mean(labels == predictions))
@@ -596,8 +597,7 @@ def build_classification_report_dataframe(
 ) -> pd.DataFrame:
     """Build a multi-label classification report as a pandas DataFrame.
 
-    Uses scikit-learn ``classification_report`` per disease class with
-    precision, recall, F1-score, and support.
+    Uses per-class precision, recall, F1-score, and support for multi-label data.
 
     Args:
         y_true: Ground-truth labels of shape ``(N, C)``.
@@ -612,39 +612,51 @@ def build_classification_report_dataframe(
     predictions = binarize_predictions(probabilities, threshold=threshold)
     names = list(class_names or NIH_DISEASE_LABELS)
 
-    report_dict = classification_report(
-        labels,
-        predictions,
-        target_names=names,
-        output_dict=True,
-        zero_division=0,
-    )
-
     rows: List[Dict[str, Union[str, float, int]]] = []
-    for class_name in names:
-        class_stats = report_dict.get(class_name, {})
+    for class_index, class_name in enumerate(names):
+        class_labels = labels[:, class_index].astype(int)
+        class_predictions = predictions[:, class_index].astype(int)
         rows.append(
             {
                 "class": class_name,
-                "precision": float(class_stats.get("precision", 0.0)),
-                "recall": float(class_stats.get("recall", 0.0)),
-                "f1-score": float(class_stats.get("f1-score", 0.0)),
-                "support": int(class_stats.get("support", 0)),
+                "precision": float(
+                    precision_score(class_labels, class_predictions, zero_division=0)
+                ),
+                "recall": float(
+                    recall_score(class_labels, class_predictions, zero_division=0)
+                ),
+                "f1-score": float(
+                    f1_score(class_labels, class_predictions, zero_division=0)
+                ),
+                "support": int(class_labels.sum()),
             }
         )
 
-    for summary_key in ("micro avg", "macro avg", "weighted avg"):
-        if summary_key in report_dict:
-            summary_stats = report_dict[summary_key]
-            rows.append(
-                {
-                    "class": summary_key,
-                    "precision": float(summary_stats.get("precision", 0.0)),
-                    "recall": float(summary_stats.get("recall", 0.0)),
-                    "f1-score": float(summary_stats.get("f1-score", 0.0)),
-                    "support": int(summary_stats.get("support", 0)),
-                }
-            )
+    summary_specs = (
+        ("micro avg", "micro"),
+        ("macro avg", "macro"),
+        ("weighted avg", "weighted"),
+    )
+    for summary_label, average_mode in summary_specs:
+        rows.append(
+            {
+                "class": summary_label,
+                "precision": float(
+                    precision_score(
+                        labels, predictions, average=average_mode, zero_division=0
+                    )
+                ),
+                "recall": float(
+                    recall_score(
+                        labels, predictions, average=average_mode, zero_division=0
+                    )
+                ),
+                "f1-score": float(
+                    f1_score(labels, predictions, average=average_mode, zero_division=0)
+                ),
+                "support": int(labels.sum()),
+            }
+        )
 
     return pd.DataFrame.from_records(rows)
 
@@ -712,16 +724,23 @@ def save_classification_report_txt(
     Raises:
         OSError: If writing the file fails.
     """
-    labels, probabilities = _validate_shapes(y_true, y_probs)
-    predictions = binarize_predictions(probabilities, threshold=threshold)
-    names = list(class_names or NIH_DISEASE_LABELS)
-
-    report_text = classification_report(
-        labels,
-        predictions,
-        target_names=names,
-        zero_division=0,
+    report_df = build_classification_report_dataframe(
+        y_true=y_true,
+        y_probs=y_probs,
+        threshold=threshold,
+        class_names=class_names,
     )
+    header = f"{'class':<24}{'precision':>12}{'recall':>12}{'f1-score':>12}{'support':>12}\n"
+    lines = [header]
+    for _, row in report_df.iterrows():
+        lines.append(
+            f"{str(row['class']):<24}"
+            f"{row['precision']:12.4f}"
+            f"{row['recall']:12.4f}"
+            f"{row['f1-score']:12.4f}"
+            f"{int(row['support']):12d}\n"
+        )
+    report_text = "".join(lines)
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

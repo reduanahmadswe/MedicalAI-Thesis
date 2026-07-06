@@ -139,6 +139,7 @@ class PathConfig:
     gradcam_dir: Path = field(
         default_factory=lambda: GOOGLE_DRIVE_ROOT / "Results" / "GradCAM"
     )
+    epoch_checkpoints_subdir: str = "Checkpoints"
 
     best_model_filename: str = "best_model.pth"
     last_model_filename: str = "last_model.pth"
@@ -168,6 +169,11 @@ class PathConfig:
         """Backward-compatible alias for ``last_model_path``."""
         return self.last_model_path
 
+    @property
+    def epoch_checkpoints_dir(self) -> Path:
+        """Return directory for per-epoch checkpoints (``Models/Checkpoints/``)."""
+        return self.checkpoint_dir / self.epoch_checkpoints_subdir
+
     def epoch_checkpoint_path(self, epoch: int) -> Path:
         """Return the checkpoint path for a specific 1-based epoch number.
 
@@ -175,11 +181,11 @@ class PathConfig:
             epoch: One-based epoch index (e.g., 1, 2, 3).
 
         Returns:
-            Path such as ``Models/checkpoint_epoch_001.pth``.
+            Path such as ``Models/Checkpoints/checkpoint_epoch_001.pth``.
         """
         if epoch <= 0:
             raise ValueError("epoch must be a positive integer.")
-        return self.checkpoint_dir / f"{self.epoch_checkpoint_prefix}{epoch:03d}.pth"
+        return self.epoch_checkpoints_dir / f"{self.epoch_checkpoint_prefix}{epoch:03d}.pth"
 
     @property
     def training_log_path(self) -> Path:
@@ -220,6 +226,7 @@ class PathConfig:
         """Create all Google Drive output directories if they do not exist."""
         for directory in (
             self.checkpoint_dir,
+            self.epoch_checkpoints_dir,
             self.results_dir,
             self.tensorboard_dir,
             self.logs_dir,
@@ -445,6 +452,20 @@ class TrainingConfig:
             raise ValueError("log_interval must be > 0.")
         if self.eval_interval <= 0:
             raise ValueError("eval_interval must be > 0.")
+        valid_monitors = {
+            "auroc",
+            "precision",
+            "recall",
+            "f1",
+            "accuracy",
+            "val_loss",
+            "train_loss",
+        }
+        if self.early_stopping_monitor not in valid_monitors:
+            raise ValueError(
+                f"early_stopping_monitor must be one of {sorted(valid_monitors)}, "
+                f"got '{self.early_stopping_monitor}'."
+            )
 
 
 @dataclass(frozen=True)

@@ -578,6 +578,45 @@ def checkpoint_exists(config: Optional[Config] = None, best: bool = True) -> boo
     return checkpoint_path.exists()
 
 
+def load_checkpoint_dict(
+    checkpoint_path: Union[str, Path],
+    map_location: Union[str, torch.device] = "cpu",
+) -> Dict[str, Any]:
+    """Load a checkpoint dictionary from disk with PyTorch version compatibility.
+
+    Args:
+        checkpoint_path: Path to a ``.pth`` checkpoint file.
+        map_location: Device mapping passed to ``torch.load``.
+
+    Returns:
+        Checkpoint dictionary.
+
+    Raises:
+        FileNotFoundError: If the checkpoint file does not exist.
+        RuntimeError: If the checkpoint cannot be read or is invalid.
+    """
+    checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    try:
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=map_location,
+            weights_only=False,
+        )
+    except TypeError:
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+    except Exception as exc:
+        logger.exception("Failed to read checkpoint from %s.", checkpoint_path)
+        raise RuntimeError(f"Unable to read checkpoint: {checkpoint_path}") from exc
+
+    if not isinstance(checkpoint, dict):
+        raise RuntimeError("Checkpoint must be a dictionary.")
+
+    return checkpoint
+
+
 def get_checkpoint_metadata(checkpoint_path: Union[str, Path]) -> Dict[str, Any]:
     """Load lightweight metadata from a checkpoint without restoring weights.
 
@@ -592,17 +631,7 @@ def get_checkpoint_metadata(checkpoint_path: Union[str, Path]) -> Dict[str, Any]
         RuntimeError: If checkpoint cannot be read.
     """
     checkpoint_path = Path(checkpoint_path)
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-
-    try:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    except Exception as exc:
-        logger.exception("Failed to read checkpoint metadata from %s.", checkpoint_path)
-        raise RuntimeError(f"Unable to read checkpoint: {checkpoint_path}") from exc
-
-    if not isinstance(checkpoint, dict):
-        raise RuntimeError("Checkpoint must be a dictionary.")
+    checkpoint = load_checkpoint_dict(checkpoint_path, map_location="cpu")
 
     metadata = {
         "checkpoint_path": str(checkpoint_path),

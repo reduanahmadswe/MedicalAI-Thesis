@@ -544,13 +544,23 @@ def create_dataloader(
         sampler = build_weighted_sampler(dataset)
         shuffle = False
 
+    drop_last = config.data.drop_last if is_train else False
+    if is_train and drop_last and len(dataset) < batch_size:
+        logger.warning(
+            "Training dataset has fewer samples (%d) than batch_size (%d). "
+            "Disabling drop_last to avoid empty training batches.",
+            len(dataset),
+            batch_size,
+        )
+        drop_last = False
+
     num_workers = config.data.num_workers if is_train else config.evaluation.num_workers
     dataloader_kwargs: Dict[str, Union[int, bool, Callable[..., SampleDict]]] = {
         "batch_size": batch_size,
         "shuffle": shuffle,
         "num_workers": num_workers,
         "pin_memory": config.data.pin_memory,
-        "drop_last": config.data.drop_last if is_train else False,
+        "drop_last": drop_last,
         "collate_fn": collate_fn,
     }
 

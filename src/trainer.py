@@ -39,8 +39,8 @@ from src.metrics import (
     save_validation_epoch_artifacts,
     search_best_thresholds,
 )
-from src.models import build_model, move_model_to_device, summarize_model
-from src.utils import set_seed
+from src.models import _align_state_dict_keys, build_model, move_model_to_device, summarize_model
+from src.utils import load_checkpoint_dict, set_seed
 
 
 logger = logging.getLogger(__name__)
@@ -654,9 +654,11 @@ class Trainer:
         """Save last, per-epoch, and optional best model checkpoints.
 
         Saves:
-        - ``Models/last_model.pth`` every epoch
-        - ``Models/checkpoint_epoch_XXX.pth`` when enabled
+        - ``Models/last_model.pth`` every epoch (overwritten)
+        - ``Models/Checkpoints/checkpoint_epoch_XXX.pth`` when enabled (never overwritten)
         - ``Models/best_model.pth`` when validation metric improves
+
+        Checkpoint save failures are logged as warnings and do not stop training.
 
         Args:
             is_best: Whether the current epoch produced the best monitored metric.
@@ -664,24 +666,34 @@ class Trainer:
         """
         checkpoint = _build_checkpoint_payload(self, epoch=epoch)
         paths = self.config.paths
-        paths.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        paths.ensure_directories()
 
         last_path = paths.last_model_path
         try:
             torch.save(checkpoint, last_path)
             logger.debug("Saved last checkpoint to %s.", last_path)
-        except Exception as exc:
-            logger.exception("Failed to save last checkpoint.")
-            raise RuntimeError(f"Unable to save last checkpoint to {last_path}.") from exc
+        except Exception:
+            logger.warning(
+                "Failed to save last checkpoint to %s. Training will continue.",
+                last_path,
+                exc_info=True,
+            )
 
-        if self.config.training.save_epoch_checkpoints:
+        save_epoch_checkpoints = (
+            self.config.training.save_epoch_checkpoints
+            and not self.config.training.save_best_only
+        )
+        if save_epoch_checkpoints:
             epoch_path = paths.epoch_checkpoint_path(epoch + 1)
             try:
                 torch.save(checkpoint, epoch_path)
                 logger.debug("Saved epoch checkpoint to %s.", epoch_path)
-            except Exception as exc:
-                logger.exception("Failed to save epoch checkpoint.")
-                raise RuntimeError(f"Unable to save epoch checkpoint to {epoch_path}.") from exc
+            except Exception:
+                logger.warning(
+                    "Failed to save epoch checkpoint to %s. Training will continue.",
+                    epoch_path,
+                    exc_info=True,
+                )
 
         if is_best:
             best_path = paths.best_model_path
@@ -692,9 +704,12 @@ class Trainer:
                     best_path,
                     self.state.best_metric,
                 )
-            except Exception as exc:
-                logger.exception("Failed to save best checkpoint.")
-                raise RuntimeError(f"Unable to save best checkpoint to {best_path}.") from exc
+            except Exception:
+                logger.warning(
+                    "Failed to save best checkpoint to %s. Training will continue.",
+                    best_path,
+                    exc_info=True,
+                )
 
     def load_checkpoint(self, checkpoint_path: Union[str, Path]) -> None:
         """Load training state from a checkpoint file.
@@ -711,18 +726,21 @@ class Trainer:
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
         try:
-            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-        except TypeError:
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint = load_checkpoint_dict(checkpoint_path, map_location=self.device)
         except Exception as exc:
             logger.exception("Failed to read checkpoint: %s", checkpoint_path)
             raise RuntimeError(f"Unable to read checkpoint: {checkpoint_path}") from exc
 
-        if not isinstance(checkpoint, dict):
-            raise RuntimeError("Checkpoint file must contain a dictionary.")
+        model_state = checkpoint.get("model_state_dict")
+        optimizer_state = checkpoint.get("optimizer_state_dict")
+        if model_state is None or optimizer_state is None:
+            raise RuntimeError(
+                "Checkpoint must contain 'model_state_dict' and 'optimizer_state_dict'."
+            )
 
-        _load_state_dict(self.model, checkpoint["model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        model_state = _align_state_dict_keys(model_state, self.model)
+        _load_state_dict(self.model, model_state)
+        self.optimizer.load_state_dict(optimizer_state)
 
         if self.scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
             self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])

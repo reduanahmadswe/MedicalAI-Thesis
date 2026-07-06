@@ -7,6 +7,7 @@ factory so new backbones can be added with a single registration line.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
@@ -14,6 +15,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from src.config import Config, ModelConfig, ModelName, get_default_config
+from src.utils import load_checkpoint_dict
 
 
 logger = logging.getLogger(__name__)
@@ -490,6 +492,37 @@ def _infer_model_name(model: nn.Module) -> ModelName:
     )
 
 
+def _align_state_dict_keys(
+    state_dict: Dict[str, torch.Tensor],
+    model: nn.Module,
+) -> Dict[str, torch.Tensor]:
+    """Align checkpoint keys with the target model (handles ``module.`` prefixes).
+
+    Args:
+        state_dict: Checkpoint state dictionary.
+        model: Target model whose keys define the expected layout.
+
+    Returns:
+        State dictionary with keys aligned to ``model.state_dict()``.
+    """
+    model_keys = set(model.state_dict().keys())
+    checkpoint_keys = set(state_dict.keys())
+    if model_keys == checkpoint_keys:
+        return state_dict
+
+    if all(key.startswith("module.") for key in checkpoint_keys):
+        stripped = {key[len("module."):]: value for key, value in state_dict.items()}
+        if set(stripped.keys()) == model_keys:
+            return stripped
+
+    if all(key.startswith("module.") for key in model_keys):
+        prefixed = {f"module.{key}": value for key, value in state_dict.items()}
+        if set(prefixed.keys()) == model_keys:
+            return prefixed
+
+    return state_dict
+
+
 def load_model_from_checkpoint(
     checkpoint_path: str,
     config: Optional[Config] = None,
@@ -511,10 +544,14 @@ def load_model_from_checkpoint(
         FileNotFoundError: If the checkpoint file does not exist.
         RuntimeError: If checkpoint loading fails.
     """
-    checkpoint_file = torch.load(checkpoint_path, map_location=map_location)
+    checkpoint_path_obj = Path(checkpoint_path)
+    if not checkpoint_path_obj.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    if not isinstance(checkpoint_file, dict):
-        raise RuntimeError("Checkpoint must be a dictionary.")
+    checkpoint_file = load_checkpoint_dict(
+        checkpoint_path_obj,
+        map_location=map_location or "cpu",
+    )
 
     config = config or get_default_config()
     model = build_model(config=config)
@@ -524,6 +561,8 @@ def load_model_from_checkpoint(
         raise RuntimeError(
             "Checkpoint does not contain 'model_state_dict' or 'state_dict'."
         )
+
+    state_dict = _align_state_dict_keys(state_dict, model)
 
     try:
         model.load_state_dict(state_dict, strict=strict)
